@@ -30,6 +30,20 @@ wget -4 -N https://raw.githubusercontent.com/opiran-club/gre-tunnel/main/opiran-
 ```
 
 </details>
+#
+#
+#
+
+## Image Of Script
+<details>
+ <summary><p><b> 👉 Click To View 👉 </b></p></summary>
+
+
+</details>
+
+#
+#
+#
 
 #### 🎁 Donate OPIran 🎁
 
