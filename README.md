@@ -31,7 +31,7 @@ wget -4 -N https://raw.githubusercontent.com/opiran-club/gre-tunnel/main/opiran-
 
 </details>
 
-## 🎁 Donate OPIran 🎁
+#### 🎁 Donate OPIran 🎁
 
 <details>
  
