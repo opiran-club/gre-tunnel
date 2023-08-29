@@ -1,0 +1,308 @@
+#!/bin/bash
+
+CYAN="\e[36m"
+GREEN="\e[32m"
+YELLOW="\e[33m"
+RED="\e[31m"
+BLUE="\e[34m"
+MAGENTA="\e[35m"
+NC="\e[0m"
+
+# Function to continue after pressing Enter
+press_enter() {
+    echo -e "\n ${RED}Press Enter to continue... ${NC}"
+    read
+}
+
+# Define the script path variable
+SCRIPT_PATH="/root/opiran-gre"
+
+# Function to add the script to /etc/rc.local
+add_to_rc_local() {
+    # Check if the script is already added to rc.local
+    if ! grep -q "$SCRIPT_PATH" /etc/rc.local; then
+        # Add the script execution line to /etc/rc.local before 'exit 0'
+        sed -i "/exit 0/i \/bin/bash $SCRIPT_PATH &" /etc/rc.local
+        echo "Script added to /etc/rc.local"
+    else
+        echo "Script already exists in /etc/rc.local"
+    fi
+}
+
+# Check if script is being run as root
+if [ "$EUID" -ne 0 ]; then
+    echo "This script must be run as root."
+    exit 1
+fi
+
+list_tunnels() {
+    echo -e "${YELLOW}Listing existing GRE and SIT tunnels:${NC}"
+    ip tunnel show | grep opiran
+}
+
+delete_tunnel() {
+    list_tunnels
+    echo -ne "${CYAN}Enter the Tunnel-ID of the GRE or SIT tunnel you want to delete: ${NC}"
+    read tunnel_id
+
+    if [ -n "$tunnel_id" ]; then
+        ip tunnel delete "$tunnel_id"
+        echo -e "${GREEN}Tunnel $tunnel_id deleted.${NC}"
+    else
+        echo -e "${RED}Invalid Tunnel-ID entered.${NC}"
+    fi
+}
+
+install() {
+    echo ""
+    echo ""
+echo -e "${RED}At First I should make sure all package are suitable for tunnel.${NC}"
+    echo ""
+    echo -ne "${GREEN}Do you let me check all prequisition to setup tunnel? [Y/N]: ${NC}"
+    read install_software
+
+    case "$install_software" in
+        [yY])
+        apt-get update && apt-get upgrade -y >/dev/null
+        apt-get install curl >/dev/null
+        apt-get install iptables iproute2 >/dev/null
+        sudo modprobe ip6_tunnel
+        sudo modprobe ip_gre
+        # Load the ip_gre module
+if lsmod | grep -q "^ip_gre"; then
+    echo -e "${GREEN}GRE module is already loaded.${NC}"
+else
+    echo -e "${YELLOW}Loading GRE module...${NC}"
+    sudo modprobe ip_gre
+    if lsmod | grep -q "^ip_gre "; then
+        echo -e "${GREEN}GRE module has been successfully loaded.${NC}"
+    else
+        echo -e "${RED}Failed to load ip_gre module. Your kernel might not support GRE.${NC}"
+        exit 1
+    fi
+fi
+
+# Load the ip6_tunnel module (for IPv6-over-IPv4 SIT tunnels)
+if lsmod | grep ip6_tunnel; then
+    echo -e "${GREEN}ip6_tunnel module is already loaded.${NC}"
+else
+    echo -e "${YELLOW}Loading ip6_tunnel module...${NC}"
+    sudo modprobe ip6_tunnel
+    if lsmod | grep ip6_tunnel; then
+        echo -e "${GREEN}ip6_tunnel module has been successfully loaded.${NC}"
+    else
+        echo -e "${RED}Failed to load ip6_tunnel module. Your kernel might not support IPv6-over-IPv4 SIT.${NC}"
+        exit 1
+    fi
+fi
+        echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf && sysctl -p
+        echo 'net.ipv6.conf.all.forwarding=1' >> /etc/sysctl.conf && sysctl -p
+            ;;
+        *)
+            exit 0
+            ;;
+    esac
+}
+
+# Start a new reverse SSH tunnel
+ipv6_over_ipv4() {
+    clear
+    echo ""
+    echo ""
+    title_text="IP-OVER-IP GRE/SIT tunnel"
+    tg_title="TG-Group @OPIranCluB"
+    yt_title="youtube.com/@opiran-inistitute"
+    clear
+    echo -e "${YELLOW}______________________________________________________${NC}"
+    echo -e ""
+    echo -e "                 ${MAGENTA}${title_text}${NC}"
+    echo -e ""
+    echo -e "${BLUE}$tg_title ${NC}"
+    echo -e "${BLUE}$yt_title  ${NC}"
+    echo -e "${YELLOW}______________________________________________________${NC}"
+    # Default values based on system IP addresses
+    ip_rule="10.55.255.0"
+    network_interface_local="10.55.255.1"
+    network_interface_remote="10.55.255.2"
+    default_local_ipv6=$(ip -6 addr show scope global | grep -oE 'inet6 [0-9a-fA-F:]+' | awk '{print $2}' | head -n 1)
+    default_local_ipv4=$(ip -4 addr show scope global | grep -oE 'inet [0-9.]+' | awk '{print $2}')
+    default_local_port=$(grep -oE '^Port\s+[0-9]+' /etc/ssh/sshd_config | awk '{print $2}' | head -n 1)
+    existing_tunnel_count=$(ip tunnel show | grep -c "gre/ip\|sit/ip")
+    next_tunnel_number=$((existing_tunnel_count + 1))
+    tunnel_id="opiran-$(printf "%02d" $next_tunnel_number)"
+
+    echo ""
+    echo ""
+    echo -e "${YELLOW}______________________________________________________${NC}"
+    echo ""
+    echo -e "${CYAN}Tunnel-ID${NC}       => ${GREEN}$tunnel_id${NC}"
+    echo -e "${CYAN}local Network${NC}   => ${GREEN}$network_interface_local${NC}"
+    echo -e "${CYAN}remote Network${NC}  => ${GREEN}$network_interface_remote${NC}"
+    echo -e "${CYAN}virtual Network${NC} => ${GREEN}$ip_rule${NC}"
+    echo -e "${YELLOW}______________________________________________________${NC}"
+    echo ""
+    echo ""
+    echo -ne "${YELLOW}Enter the local IPv4 address if its not => ${GREEN}[$default_local_ipv4]: ${NC}"
+    read local_ipv6
+    local_ipv4=${local_ipv4:-$default_local_ipv4}
+    
+    echo ""
+    echo -e "                 ${GREEN}Remote VPS Information${NC}"
+
+    echo ""
+    echo -ne "${YELLOW}Enter the Remote IPv4 address : ${NC}"
+    read remote_ipv4
+
+    echo ""
+    echo -ne "${YELLOW}Enter the Remote IPv6 address: ${NC}"
+    read remote_ipv6
+    
+    echo ""
+    echo -ne "${YELLOW}Enter the Remote SSH port: ${NC}"
+    read remote_port
+    
+    install
+
+    echo -e "  ${GREEN}All Necessary packages have been installed, and configed${NC}"
+
+    {
+    ip tunnel add $tunnel_id mode gre local $local_ipv4 remote $remote_ipv4 ttl 255
+    ip addr add $network_interface_local/30 dev $tunnel_id
+    ip addr add $ip_rule/30 dev $tunnel_id
+    ip link set $tunnel_id mtu 1480 up
+    }
+    
+    ssh -p $remote_port root@$remote_ipv4 "
+    $(declare -f install); install
+
+    ip tunnel add $tunnel_id mode gre local $remote_ipv4 remote $local_ipv4 ttl 255
+    ip addr add $network_interface_remote/30 dev $tunnel_id
+    ip addr add $ip_rule/30 dev $tunnel_id
+    ip link set $tunnel_id mtu 1480 up
+    
+    echo '100 GRE' >> /etc/iproute2/rt_tables
+    ip rule add from $ip_rule/30 table GRE
+    ip route add default via $network_interface_local table GRE
+"
+    sleep 3
+    echo ""
+    echo ""
+    echo -e "          ${GREEN}Tunnel $tunnel_id has been created.${NC}"
+    echo ""
+    echo -e "             ${GREEN}GRE TUNNEL SETUP COMPLETE${NC}"        
+    echo ""
+    echo ""
+    clear
+    echo -e "           ${YELLOW}Let Me setup NAT configuration ${NC}"
+    sleep 3
+    # NAT configuration
+    iptables -t nat -A POSTROUTING -s $ip_rule ! -o gre+ -j SNAT --to-source $local_ipv4
+
+    echo ""
+    echo -e "${GREEN}Select port forwarding option:${NC}"
+    echo -e "${CYAN} 1${NC}) Forward all ports"
+    echo -e "${CYAN} 2${NC}) Forward a specific port"
+    echo -ne "${GREEN}Enter your choice ${RED}[1-2]: ${NC}"
+    read port_forwarding_choice
+
+    case "$port_forwarding_choice" in
+    1)
+        # Forward all ports
+        iptables -A FORWARD -d $local_ipv4 -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+        iptables -A FORWARD -s $remote_ipv4 -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+        iptables -t nat -A PREROUTING -d $local_ipv4 -j DNAT --to-destination $remote_ipv4
+        ;;
+    2)
+    echo ""
+    echo -e "${RED}Tunnel Port:${GREEN}Tunnel to remote Server using this port (E.g. 80).${NC}"
+    echo -ne "${YELLOW}Enter the Tunnel port of local Server: ${NC}"
+    read local_tunnel
+
+    echo ""
+    echo -e "${RED}Tunnel Port:${GREEN}Tunnel to local Server using this port (E.g. 80).${NC}"
+    echo -ne "${YELLOW}Enter the Tunnel port of remote Server: ${NC}"
+    read remote_tunnel
+
+    # Forward a specific port
+    iptables -A FORWARD -d $network_interface_remote -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+    iptables -A FORWARD -s $network_interface_remote -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+    iptables -t nat -A PREROUTING -d $local_ipv4 -p tcp -m tcp --dport $local_tunnel -j DNAT --to-destination $remote_ipv4:$remote_tunnel
+    ;;
+    *)
+        echo -e "${RED}Invalid choice. No port forwarding set.${NC}"
+        ;;
+esac
+
+    echo ""
+    echo ""
+    echo -e "  ${GREEN}All Function has been set up successfully, Now Save the tunnel to be live after reboot${NC}"
+    echo ""
+    echo -e "               ${YELLOW}THANKS FOR CHOOSING ME, OPIRAN :D ${NC}"
+    echo ""
+    echo -e "${GREEN}Do you want to return to the main menu? [Y/N]: ${NC}"
+    read return_to_menu
+
+    case "$return_to_menu" in
+        [yY])
+            ;;
+        *)
+            exit 0
+            ;;
+    esac
+    }
+
+# Main menu loop
+while true; do
+    clear
+    
+# Calculate the padding for adjusting the title position
+    title_text="IP-OVER-IP GRE/SIT tunnel"
+    tg_title="TG-Group @OPIranCluB"
+    yt_title="youtube.com/@opiran-inistitute"
+    clear
+    echo -e "${YELLOW}______________________________________________________${NC}"
+    echo -e ""
+    echo -e "                 ${MAGENTA}${title_text}${NC}"
+    echo -e ""
+    echo -e "${BLUE}$tg_title ${NC}"
+    echo -e "${BLUE}$yt_title  ${NC}"
+    echo -e "${YELLOW}______________________________________________________${NC}"
+    echo ""
+    echo ""
+    echo -e "${CYAN} 1${NC}) ${RED}=> ${YELLOW}Start New GRE/SIT Tunnel${NC}"
+    echo -e "${CYAN} 2${NC}) ${RED}=> ${YELLOW}GRE/SIT Tunnels List${NC}"
+    echo -e "${CYAN} 3${NC}) ${RED}=> ${YELLOW}Terminate GRE/SIT Tunnel${NC}"
+    echo -e "${CYAN} 4${NC}) ${RED}=> ${YELLOW}Save the tunnel to run after reboot${NC}"
+    echo ""
+    echo -e "${CYAN} 5${NC}) ${RED}>>>> ${YELLOW}Exit ${RED}<<<<${NC}"
+    echo ""
+    echo -e "${GREEN}Select an option ${RED}[1-4]: ${NC}"
+    read option
+
+    case $option in
+        1)
+            ipv6_over_ipv4
+            press_enter
+            ;;
+        2)
+            list_tunnels
+            press_enter
+            ;;
+        3)
+            delete_tunnel
+            press_enter
+            ;;
+        4)
+            add_to_rc_local
+            press_enter
+            ;;
+        5)
+            echo -e "${YELLOW}Exiting.${NC}"
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}Invalid option.${NC}"
+            continue
+            ;;
+    esac
+done
